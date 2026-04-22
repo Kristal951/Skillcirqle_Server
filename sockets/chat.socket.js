@@ -86,9 +86,10 @@ export const chatSocket = (io) => {
     // 📤 SEND MESSAGE
     // =====================
     socket.on("send_message", async (data) => {
+      console.log("INSTANCE PID:", process.pid);
+      console.log("SEND MESSAGE CALLED");
       const senderId = socket.user.id;
       const { conversationId, content, tempId } = data;
-      console.log(data, data)
 
       console.log("📤 [MESSAGE] Sending message...");
       console.log("➡️ Content:", content);
@@ -109,7 +110,7 @@ export const chatSocket = (io) => {
 
       await updateConversationLastMessage(
         conversationId,
-        payload.content,
+        data.content,
         message.created_at,
       );
 
@@ -144,6 +145,14 @@ export const chatSocket = (io) => {
       );
 
       socket.to(conversationId).emit("typing", {
+        conversationId,
+        userId: socket.user.id,
+      });
+    });
+
+    socket.on("stop_typing", ({ conversationId }) => {
+      socket.to(conversationId).emit("stop_typing", {
+        conversationId,
         userId: socket.user.id,
       });
     });

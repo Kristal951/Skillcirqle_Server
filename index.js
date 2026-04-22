@@ -3,19 +3,20 @@ import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import dotenv from "dotenv";
-import { chatSocket } from "./sockets/chat.socket.js";
 import { redis } from "./config/redis.js";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { supabaseAdmin } from "./config/supabase.admin.js";
 import { presenceSocket } from "./sockets/presence.socket.js";
 import { typingSocket } from "./sockets/typing.socket.js";
 import { readReceiptSocket } from "./sockets/readReceipt.socket.js";
+import { initSockets } from "./utils/initSockets.js";
 
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
 const USER_SOCKET_KEY = (userId) => `user:socket:${userId}`;
+let initialized = false;
 
 const io = new Server(server, {
   cors: {
@@ -95,8 +96,7 @@ io.on("connection", async (socket) => {
 
   console.log("🟢 Active session set:", userId);
 
-  // attach features
-  chatSocket(io, socket);
+  initSockets(io);
   presenceSocket(io, socket);
   typingSocket(io, socket);
   readReceiptSocket(io, socket);
