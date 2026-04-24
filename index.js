@@ -16,7 +16,6 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const USER_SOCKET_KEY = (userId) => `user:socket:${userId}`;
-let initialized = false;
 
 const io = new Server(server, {
   cors: {
@@ -66,22 +65,16 @@ io.on("connection", async (socket) => {
   const userId = socket.user.id;
   const key = USER_SOCKET_KEY(userId);
 
-  console.log("🟢 Incoming connection:", userId);
-
   const existingSocketId = await redis.get(key);
 
-  // 🔥 CASE 1: same socket reconnecting → ignore
   if (existingSocketId === socket.id) {
-    console.log("🟡 Reconnected same socket:", socket.id);
     return;
   }
 
-  // 🔥 CASE 2: another active session exists → KILL OLD
   if (existingSocketId) {
     const oldSocket = io.sockets.sockets.get(existingSocketId);
 
     if (oldSocket) {
-      console.log("🔴 Killing previous session:", existingSocketId);
 
       oldSocket.emit("force_logout", {
         reason: "Another device logged in",
@@ -91,19 +84,14 @@ io.on("connection", async (socket) => {
     }
   }
 
-  // 🔥 Register new session (GLOBAL STATE)
   await redis.set(key, socket.id);
-
-  console.log("🟢 Active session set:", userId);
 
   initSockets(io);
   presenceSocket(io, socket);
   typingSocket(io, socket);
   readReceiptSocket(io, socket);
 
-  // cleanup
   socket.on("disconnect", async (reason) => {
-    console.log("🔴 Disconnected:", userId, reason);
 
     const current = await redis.get(key);
 

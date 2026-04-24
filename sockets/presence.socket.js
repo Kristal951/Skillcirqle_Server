@@ -30,7 +30,6 @@ export const presenceSocket = (io, socket) => {
         onlineUsers.filter((id) => id === userId).length === 1;
 
       if (isFirstConnection) {
-        console.log(`🟢 [PRESENCE] ${userId} ONLINE`);
         io.emit("user_online", { userId });
       }
 
@@ -53,7 +52,6 @@ export const presenceSocket = (io, socket) => {
       const fullyOffline = await setUserOffline(userId, socket.id);
 
       if (fullyOffline) {
-        console.log(`🔴 [PRESENCE] ${userId} OFFLINE`);
         io.emit("user_offline", { userId });
       }
     } catch (err) {

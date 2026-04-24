@@ -1,29 +1,18 @@
 import { supabaseAdmin } from "../config/supabase.admin.js";
-import jwt from "jsonwebtoken";
 import {
   saveMessage,
   updateConversationLastMessage,
 } from "../services/message.service.js";
 
 export const chatSocket = (io) => {
-  // =====================
-  // 🔐 AUTH MIDDLEWARE
-  // =====================
   io.use(async (socket, next) => {
     try {
-      console.log("🔐 [AUTH] Checking socket token...");
-
       const token = socket.handshake.auth?.token;
-
-      if (!token) {
-        console.log("❌ [AUTH] No token provided");
-        return next(new Error("No token provided"));
-      }
+      if (!token) return next(new Error("No token provided"));
 
       const { data, error } = await supabaseAdmin.auth.getUser(token);
 
       if (error || !data?.user) {
-        console.log("❌ [AUTH] Invalid token");
         return next(new Error("Unauthorized"));
       }
 
@@ -34,115 +23,150 @@ export const chatSocket = (io) => {
         .single();
 
       socket.user = {
-        ...socket.user,
-        name: profile?.name,
-        avatar: profile?.avatar_url,
+        id: data.user.id,
+        name: profile?.name || "Unknown",
+        avatar: profile?.avatar_url || null,
       };
 
-      console.log(`✅ [AUTH] User authenticated: ${socket.user.id}`);
       next();
     } catch (err) {
-      console.log("❌ [AUTH] Error:", err.message);
       next(new Error("Unauthorized"));
     }
   });
 
-  // =====================
-  // CONNECTION
-  // =====================
+  const emitMessageStatus = (conversationId, messageId, status, userId) => {
+    io.to(conversationId).emit("message_status", {
+      messageId,
+      status,
+      userId,
+      timestamp: Date.now(),
+    });
+  };
+
   io.on("connection", (socket) => {
-    console.log(`🟢 [CONNECT] User connected: ${socket.user.id}`);
+    console.log(`🟢 Connected: ${socket.user.id}`);
 
-    // =====================
-    // 🔌 JOIN ROOM
-    // =====================
     socket.on("join_room", async (conversationId) => {
-      console.log(
-        `📥 [JOIN] User ${socket.user.id} trying room ${conversationId}`,
-      );
+      if (!conversationId) return;
 
-      const { data, error } = await supabaseAdmin
+      const { data } = await supabaseAdmin
         .from("conversation_participants")
         .select("id")
         .eq("conversation_id", conversationId)
         .eq("user_id", socket.user.id)
-        .single();
+        .maybeSingle();
 
-      if (error || !data) {
-        console.log(
-          `⛔ [JOIN] Access denied for user ${socket.user.id} in room ${conversationId}`,
-        );
-        return;
+      if (!data) {
+        return socket.emit("error", {
+          message: "Unauthorized room access",
+        });
       }
 
       socket.join(conversationId);
 
-      console.log(
-        `✅ [JOIN] User ${socket.user.id} joined room ${conversationId}`,
-      );
+      socket.to(conversationId).emit("user_joined", {
+        userId: socket.user.id,
+      });
     });
 
-    // =====================
-    // 📤 SEND MESSAGE
-    // =====================
     socket.on("send_message", async (data) => {
-      console.log("INSTANCE PID:", process.pid);
-      console.log("SEND MESSAGE CALLED");
-      const senderId = socket.user.id;
       const { conversationId, content, tempId } = data;
 
-      console.log("📤 [MESSAGE] Sending message...");
-      console.log("➡️ Content:", content);
-      console.log("➡️ Conversation:", conversationId);
-      console.log("➡️ Sender:", senderId);
+      if (!conversationId || !content?.trim()) return;
 
-      if (!content?.trim()) {
-        console.log("⚠️ [MESSAGE] Empty message ignored");
+      let message;
+
+      try {
+        message = await saveMessage({
+          ...data,
+          senderId: socket.user.id,
+          metadata: {
+            sender_name: socket.user.name,
+            sender_avatar_url: socket.user.avatar,
+          },
+        });
+      } catch (err) {
+        socket.emit("message_error", { tempId });
         return;
       }
 
-      const message = await saveMessage({
-        ...data,
-        senderId,
-      });
+      if (!message) return;
 
-      console.log(`💾 [MESSAGE] Saved: ${message.id}`);
+      socket.emit("message_ack", {
+        tempId,
+        realId: message.id,
+        status: "sent",
+      });
 
       await updateConversationLastMessage(
         conversationId,
-        data.content,
+        content,
         message.created_at,
       );
 
-      console.log("🔄 [CONVERSATION] Updated last message");
-      console.log(senderId, "senderID");
-      // 4. Emit message
       io.to(conversationId).emit("new_message", {
-        id: message.id,
-        conversation_id: message.conversation_id,
-        content: message.content,
-        created_at: message.created_at,
-        message_type: message.message_type,
-        metadata: message.metadata,
-        tempId,
-
-        sender: {
-          id: socket.user.id,
-          name: socket.user.name,
-          avatar: socket.user.avatar,
-        },
+        ...message,
+        senderId: socket.user.id,
       });
-
-      console.log(`📡 [EMIT] Message broadcasted to ${conversationId}`);
     });
 
-    // =====================
-    // ⌨️ TYPING
-    // =====================
-    socket.on("typing", ({ conversationId }) => {
-      console.log(
-        `⌨️ [TYPING] User ${socket.user.id} typing in ${conversationId}`,
+    socket.on("message_delivered", async ({ messageId, conversationId }) => {
+      if (!messageId || !conversationId) return;
+
+      await supabaseAdmin.from("message_receipts").upsert({
+        message_id: messageId,
+        conversation_id: conversationId,
+        user_id: socket.user.id,
+        delivered_at: new Date().toISOString(),
+      });
+
+      socket.to(conversationId).emit("message_status", {
+        messageId,
+        status: "delivered",
+        userId: socket.user.id,
+        timestamp: Date.now(),
+      });
+    });
+
+    socket.on("mark_as_read", async ({ conversationId, messageId }) => {
+      if (!conversationId || !messageId) return;
+
+      const userId = socket.user.id;
+
+     const res = await supabaseAdmin.from("conversations_read").upsert({
+        conversation_id: conversationId,
+        user_id: userId,
+        last_read_message_id: new Date().toISOString(),
+      })
+
+      await supabaseAdmin.from("message_receipts").upsert(
+        {
+          message_id: messageId,
+          conversation_id: conversationId,
+          user_id: socket.user.id,
+          read_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "message_id,user_id",
+        },
       );
+
+      io.to(conversationId).emit("messages_seen", {
+        conversationId,
+        userId,
+        messageId,
+      });
+
+      socket.to(conversationId).emit("message_status", {
+        messageId,
+        status: "read",
+        userId,
+        timestamp: Date.now(),
+      });
+    });
+
+    socket.on("typing", ({ conversationId }) => {
+      if (!conversationId) return;
 
       socket.to(conversationId).emit("typing", {
         conversationId,
@@ -151,25 +175,16 @@ export const chatSocket = (io) => {
     });
 
     socket.on("stop_typing", ({ conversationId }) => {
+      if (!conversationId) return;
+
       socket.to(conversationId).emit("stop_typing", {
         conversationId,
         userId: socket.user.id,
       });
     });
 
-    socket.on("stop_typing", ({ conversationId, userId }) => {
-      socket.to(conversationId).emit("stop_typing", {
-        userId,
-      });
-    });
-
-    // =====================
-    // ❌ DISCONNECT
-    // =====================
-    socket.on("disconnect", (reason) => {
-      console.log(
-        `🔴 [DISCONNECT] User ${socket.user?.id ?? "unknown"} | ${reason}`,
-      );
+    socket.on("disconnect", () => {
+      console.log(`🔴 Disconnected: ${socket.user.id}`);
     });
   });
 };
