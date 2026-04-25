@@ -83,6 +83,7 @@ export const chatSocket = (io) => {
           metadata: {
             sender_name: socket.user.name,
             sender_avatar_url: socket.user.avatar,
+            ...data.metadata
           },
         });
       } catch (err) {
