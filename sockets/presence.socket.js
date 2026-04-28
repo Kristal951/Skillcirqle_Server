@@ -7,35 +7,22 @@ import {
 export const presenceSocket = (io, socket) => {
   const userId = socket.user.id;
 
-  // =====================
-  // 🟢 HANDLE CONNECT
-  // =====================
   const handleConnect = async () => {
     try {
-      // add socket to Redis
       await setUserOnline(userId, socket.id);
-
-      // get number of sockets for this user
-      // (only emit if first connection)
       const sockets = await socket.server
         .of("/")
         .adapter
         .sockets(new Set([socket.id]));
 
-      // 🔥 safer approach: check via Redis instead
       const onlineUsers = await getOnlineUsers();
 
-      // if user appears only once → first connection
       const isFirstConnection =
         onlineUsers.filter((id) => id === userId).length === 1;
 
       if (isFirstConnection) {
         io.emit("user_online", { userId });
       }
-
-      // =====================
-      // 📡 SEND INITIAL ONLINE USERS
-      // =====================
       socket.emit("online_users", onlineUsers);
     } catch (err) {
       console.error("❌ Presence connect error:", err.message);
@@ -44,9 +31,6 @@ export const presenceSocket = (io, socket) => {
 
   handleConnect();
 
-  // =====================
-  // 🔴 HANDLE DISCONNECT
-  // =====================
   socket.on("disconnect", async () => {
     try {
       const fullyOffline = await setUserOffline(userId, socket.id);

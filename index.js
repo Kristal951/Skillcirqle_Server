@@ -75,7 +75,6 @@ io.on("connection", async (socket) => {
     const oldSocket = io.sockets.sockets.get(existingSocketId);
 
     if (oldSocket) {
-
       oldSocket.emit("force_logout", {
         reason: "Another device logged in",
       });
@@ -92,7 +91,6 @@ io.on("connection", async (socket) => {
   readReceiptSocket(io, socket);
 
   socket.on("disconnect", async (reason) => {
-
     const current = await redis.get(key);
 
     if (current === socket.id) {

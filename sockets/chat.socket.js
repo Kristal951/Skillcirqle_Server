@@ -4,6 +4,39 @@ import {
   updateConversationLastMessage,
 } from "../services/message.service.js";
 
+const participantCache = new Map();
+
+const CACHE_TTL = 60 * 1000;
+const cacheTime = new Map();
+
+export const getConversationParticipants = async (conversationId) => {
+  const now = Date.now();
+
+  if (
+    participantCache.has(conversationId) &&
+    now - cacheTime.get(conversationId) < CACHE_TTL
+  ) {
+    return participantCache.get(conversationId);
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("conversation_participants")
+    .select("user_id")
+    .eq("conversation_id", conversationId);
+
+  if (error) {
+    console.log("❌ participant fetch error:", error.message);
+    return [];
+  }
+
+  const users = data?.map((p) => p.user_id) || [];
+
+  participantCache.set(conversationId, users);
+  cacheTime.set(conversationId, Date.now());
+
+  return users;
+};
+
 export const chatSocket = (io) => {
   io.use(async (socket, next) => {
     try {
@@ -45,6 +78,7 @@ export const chatSocket = (io) => {
 
   io.on("connection", (socket) => {
     console.log(`🟢 Connected: ${socket.user.id}`);
+    socket.join(`user:${socket.user.id}`);
 
     socket.on("join_room", async (conversationId) => {
       if (!conversationId) return;
@@ -78,12 +112,12 @@ export const chatSocket = (io) => {
 
       try {
         message = await saveMessage({
-          ...data,
+          conversationId,
+          content,
           senderId: socket.user.id,
           metadata: {
             sender_name: socket.user.name,
             sender_avatar_url: socket.user.avatar,
-            ...data.metadata
           },
         });
       } catch (err) {
@@ -91,19 +125,33 @@ export const chatSocket = (io) => {
         return;
       }
 
-      if (!message) return;
+      await updateConversationLastMessage(
+        conversationId,
+        content,
+        message.created_at,
+      );
+
+      const participants = await getConversationParticipants(conversationId);
+
+      const recipients = participants.filter((id) => id !== socket.user.id);
+
+      if (recipients.length > 0) {
+        await supabaseAdmin.from("message_receipts").upsert(
+          recipients.map((userId) => ({
+            message_id: message.id,
+            user_id: userId,
+          })),
+          {
+            onConflict: "message_id,user_id",
+          },
+        );
+      }
 
       socket.emit("message_ack", {
         tempId,
         realId: message.id,
         status: "sent",
       });
-
-      await updateConversationLastMessage(
-        conversationId,
-        content,
-        message.created_at,
-      );
 
       io.to(conversationId).emit("new_message", {
         ...message,
@@ -112,58 +160,38 @@ export const chatSocket = (io) => {
     });
 
     socket.on("message_delivered", async ({ messageId, conversationId }) => {
-      if (!messageId || !conversationId) return;
+      if (!messageId) return;
 
-      await supabaseAdmin.from("message_receipts").upsert({
-        message_id: messageId,
-        conversation_id: conversationId,
-        user_id: socket.user.id,
-        delivered_at: new Date().toISOString(),
-      });
+      await supabaseAdmin
+        .from("message_receipts")
+        .update({ delivered_at: new Date().toISOString() })
+        .eq("message_id", messageId)
+        .eq("user_id", socket.user.id);
 
       socket.to(conversationId).emit("message_status", {
         messageId,
         status: "delivered",
         userId: socket.user.id,
-        timestamp: Date.now(),
       });
     });
 
-    socket.on("mark_as_read", async ({ conversationId, messageId }) => {
-      if (!conversationId || !messageId) return;
+    socket.on("mark_as_read", async ({ conversationId, lastMessageId }) => {
+      if (!conversationId || !lastMessageId) return;
 
-      const userId = socket.user.id;
-
-     const res = await supabaseAdmin.from("conversations_read").upsert({
-        conversation_id: conversationId,
-        user_id: userId,
-        last_read_message_id: new Date().toISOString(),
-      })
-
-      await supabaseAdmin.from("message_receipts").upsert(
-        {
-          message_id: messageId,
-          conversation_id: conversationId,
+      try {
+        await supabaseAdmin.rpc("mark_conversation_read", {
+          conv_id: conversationId,
           user_id: socket.user.id,
-          read_at: new Date().toISOString(),
-        },
-        {
-          onConflict: "message_id,user_id",
-        },
-      );
+          msg_id: lastMessageId,
+        });
 
-      io.to(conversationId).emit("messages_seen", {
-        conversationId,
-        userId,
-        messageId,
-      });
-
-      socket.to(conversationId).emit("message_status", {
-        messageId,
-        status: "read",
-        userId,
-        timestamp: Date.now(),
-      });
+        io.to(conversationId).emit("messages_read", {
+          userId: socket.user.id,
+          lastMessageId,
+        });
+      } catch (err) {
+        console.log("mark_as_read error:", err.message);
+      }
     });
 
     socket.on("typing", ({ conversationId }) => {

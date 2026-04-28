@@ -47,17 +47,13 @@ export const saveMessage = async ({
 export const updateConversationLastMessage = async (
   conversationId,
   content,
-  createdAt,
+  createdAt
 ) => {
   if (!conversationId) return;
 
-  const { error } = await supabaseAdmin
-    .from("conversations")
-    .update({
-      last_message: content,
-      last_message_at: createdAt,
-    })
-    .eq("id", conversationId);
+  const { error } = await supabaseAdmin.rpc("increment_unread", {
+    conv_id: conversationId,
+  });
 
   if (error) {
     console.log("❌ updateConversationLastMessage error:", error.message);
@@ -85,3 +81,4 @@ export const getProfile = async (userId) => {
 
   return data;
 };
+``
