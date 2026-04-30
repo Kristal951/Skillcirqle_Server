@@ -12,7 +12,6 @@ export const saveMessage = async ({
   message_type,
   metadata,
 }) => {
-  // ✅ validation guard
   if (!conversationId || !senderId || !content?.trim()) {
     throw new Error("Invalid message payload");
   }
@@ -46,21 +45,27 @@ export const saveMessage = async ({
  */
 export const updateConversationLastMessage = async (
   conversationId,
-  content,
-  createdAt,
+  userId,
+  lastMessageId,
 ) => {
   if (!conversationId) return;
+  console.log(conversationId, userId, lastMessageId)
 
-  const { error } = await supabaseAdmin
-    .from("conversations")
-    .update({
-      last_message: content,
-      last_message_at: createdAt,
-    })
-    .eq("id", conversationId);
+  try {
+    const { data, error } = await supabaseAdmin.rpc("mark_conversation_read", {
+      conv_id: conversationId,
+      p_user_id: userId,
+      msg_id: lastMessageId,
+    });
 
-  if (error) {
-    console.log("❌ updateConversationLastMessage error:", error.message);
+    if (error) {
+      console.error("❌ Conversation update error:", error.message);
+      return;
+    }
+
+    console.log("✅ conversation updated:", data);
+  } catch (err) {
+    console.error("❌ updateConversationLastMessage error:", err.message);
   }
 };
 

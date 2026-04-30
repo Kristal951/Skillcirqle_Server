@@ -4,6 +4,41 @@ import {
   updateConversationLastMessage,
 } from "../services/message.service.js";
 
+const participantCache = new Map();
+const activeUsersInRoom = new Map();
+const activeChatFocus = new Map();
+
+const CACHE_TTL = 60 * 1000;
+const cacheTime = new Map();
+
+export const getConversationParticipants = async (conversationId) => {
+  const now = Date.now();
+
+  if (
+    participantCache.has(conversationId) &&
+    now - cacheTime.get(conversationId) < CACHE_TTL
+  ) {
+    return participantCache.get(conversationId);
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("conversation_participants")
+    .select("user_id")
+    .eq("conversation_id", conversationId);
+
+  if (error) {
+    console.log("❌ participant fetch error:", error.message);
+    return [];
+  }
+
+  const users = data?.map((p) => p.user_id) || [];
+
+  participantCache.set(conversationId, users);
+  cacheTime.set(conversationId, Date.now());
+
+  return users;
+};
+
 export const chatSocket = (io) => {
   io.use(async (socket, next) => {
     try {
@@ -45,6 +80,7 @@ export const chatSocket = (io) => {
 
   io.on("connection", (socket) => {
     console.log(`🟢 Connected: ${socket.user.id}`);
+    socket.join(`user:${socket.user.id}`);
 
     socket.on("join_room", async (conversationId) => {
       if (!conversationId) return;
@@ -62,6 +98,33 @@ export const chatSocket = (io) => {
         });
       }
 
+      try {
+        const { data: receipts, error } = await supabaseAdmin.rpc(
+          "mark_messages_delivered",
+          {
+            conv_id: conversationId,
+            u_id: socket.user.id,
+          },
+        );
+
+        if (error) throw error;
+
+        if (receipts && receipts.length > 0) {
+          io.to(conversationId).emit("messages_delivered", {
+            conversationId,
+            userId: socket.user.id,
+          });
+        }
+      } catch (err) {
+        console.error("❌ RPC delivery error:", err.message);
+      }
+
+      if (!activeUsersInRoom.has(conversationId)) {
+        activeUsersInRoom.set(conversationId, new Set());
+      }
+
+      activeUsersInRoom.get(conversationId).add(socket.user.id);
+
       socket.join(conversationId);
 
       socket.to(conversationId).emit("user_joined", {
@@ -69,21 +132,50 @@ export const chatSocket = (io) => {
       });
     });
 
+    socket.on("leave_room", (conversationId) => {
+      if (!conversationId) return;
+
+      socket.leave(conversationId);
+
+      const room = activeUsersInRoom.get(conversationId);
+      if (room) {
+        room.delete(socket.user.id);
+        if (room.size === 0) {
+          activeUsersInRoom.delete(conversationId);
+        }
+      }
+    });
+
+    socket.on("chat_open", ({ conversationId }) => {
+      activeChatFocus.set(socket.user.id, conversationId);
+    });
+
+    socket.on("chat_close", () => {
+      activeChatFocus.delete(socket.user.id);
+    });
+
     socket.on("send_message", async (data) => {
       const { conversationId, content, tempId } = data;
-
       if (!conversationId || !content?.trim()) return;
+
+      const socketsInRoom = await io.in(conversationId).fetchSockets();
+      const onlineUserIds = socketsInRoom.map((s) => s.user?.id);
+
+      const participants = await getConversationParticipants(conversationId);
+      const recipients = participants.filter((id) => id !== socket.user.id);
 
       let message;
 
       try {
         message = await saveMessage({
-          ...data,
+          conversationId,
+          content,
           senderId: socket.user.id,
+          message_type: data.message_type || "text",
           metadata: {
             sender_name: socket.user.name,
             sender_avatar_url: socket.user.avatar,
-            ...data.metadata
+            ...data.metadata,
           },
         });
       } catch (err) {
@@ -91,7 +183,38 @@ export const chatSocket = (io) => {
         return;
       }
 
-      if (!message) return;
+      try {
+        await updateConversationLastMessage(
+          conversationId,
+          socket.user.id,
+          message.id,
+        );
+      } catch (error) {
+        console.error(
+          "❌ Failed to update conversation last message:",
+          error.message,
+        );
+      }
+
+      io.to(conversationId).emit("conversation:updated", {
+        conversationId,
+        last_message: content,
+        last_message_at: message.created_at,
+        last_message_id: message.id,
+      });
+
+      if (recipients.length > 0) {
+        await supabaseAdmin.from("message_receipts").upsert(
+          recipients.map((userId) => ({
+            message_id: message.id,
+            user_id: userId,
+            conversation_id: conversationId,
+          })),
+          {
+            onConflict: "message_id,user_id",
+          },
+        );
+      }
 
       socket.emit("message_ack", {
         tempId,
@@ -99,71 +222,78 @@ export const chatSocket = (io) => {
         status: "sent",
       });
 
-      await updateConversationLastMessage(
-        conversationId,
-        content,
-        message.created_at,
-      );
-
       io.to(conversationId).emit("new_message", {
         ...message,
         senderId: socket.user.id,
       });
     });
 
-    socket.on("message_delivered", async ({ messageId, conversationId }) => {
-      if (!messageId || !conversationId) return;
+    socket.on(
+      "message_delivered",
+      async ({ messageId, conversationId, otherUserId }) => {
+        if ((!messageId || !conversationId, !otherUserId)) return;
 
-      await supabaseAdmin.from("message_receipts").upsert({
-        message_id: messageId,
-        conversation_id: conversationId,
-        user_id: socket.user.id,
-        delivered_at: new Date().toISOString(),
+        const socketsInRoom = await io.in(conversationId).fetchSockets();
+        const onlineUserIds = socketsInRoom.map((s) => s.user?.id);
+        if (!onlineUserIds.includes(otherUserId)) return;
+
+        try {
+          const { data, error } = await supabaseAdmin.rpc(
+            "mark_single_delivered",
+            {
+              msg_id: messageId,
+              u_id: otherUserId,
+            },
+          );
+
+          if (error) throw error;
+
+          if (data && data.length > 0) {
+            io.to(conversationId).emit("message_status_update", {
+              messageId,
+              conversationId,
+              status: "delivered",
+              userId: socket.user.id,
+            });
+          }
+        } catch (err) {
+          console.error("❌ Single delivery update failed:", err.message);
+        }
+      },
+    );
+
+    socket.on("mark_as_read", async ({ conversationId }) => {
+      if (!conversationId) return;
+
+      const roomUsers = activeUsersInRoom.get(conversationId);
+
+      if (!roomUsers || roomUsers.size < 2) {
+        return;
+      }
+
+      const bothActive = [...roomUsers].every((userId) => {
+        return activeChatFocus.get(userId) === conversationId;
       });
 
-      socket.to(conversationId).emit("message_status", {
-        messageId,
-        status: "delivered",
-        userId: socket.user.id,
-        timestamp: Date.now(),
-      });
-    });
+      if (!bothActive) return;
+      try {
+        await supabaseAdmin.rpc("mark_conversation_read", {
+          conv_id: conversationId,
+          p_user_id: socket.user.id,
+        });
 
-    socket.on("mark_as_read", async ({ conversationId, messageId }) => {
-      if (!conversationId || !messageId) return;
+        await supabaseAdmin.rpc("mark_all_read", {
+          conv_id: conversationId,
+          u_id: socket.user.id,
+        });
 
-      const userId = socket.user.id;
-
-     const res = await supabaseAdmin.from("conversations_read").upsert({
-        conversation_id: conversationId,
-        user_id: userId,
-        last_read_message_id: new Date().toISOString(),
-      })
-
-      await supabaseAdmin.from("message_receipts").upsert(
-        {
-          message_id: messageId,
-          conversation_id: conversationId,
-          user_id: socket.user.id,
-          read_at: new Date().toISOString(),
-        },
-        {
-          onConflict: "message_id,user_id",
-        },
-      );
-
-      io.to(conversationId).emit("messages_seen", {
-        conversationId,
-        userId,
-        messageId,
-      });
-
-      socket.to(conversationId).emit("message_status", {
-        messageId,
-        status: "read",
-        userId,
-        timestamp: Date.now(),
-      });
+        io.to(conversationId).emit("messages_seen", {
+          conversationId,
+          userId: socket.user.id,
+        });
+      } catch (err) {
+        console.log("❌ mark_as_read error:", err.message);
+      }
     });
 
     socket.on("typing", ({ conversationId }) => {
@@ -186,6 +316,13 @@ export const chatSocket = (io) => {
 
     socket.on("disconnect", () => {
       console.log(`🔴 Disconnected: ${socket.user.id}`);
+      for (const [roomId, users] of activeUsersInRoom.entries()) {
+        users.delete(socket.user.id);
+
+        if (users.size === 0) {
+          activeUsersInRoom.delete(roomId);
+        }
+      }
     });
   });
 };
