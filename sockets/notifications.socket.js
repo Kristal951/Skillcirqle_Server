@@ -41,7 +41,6 @@ export const notificationsSocket = (io) => {
     console.log("🔔 Notifications connected:", currentUserId);
 
     socket.on("notification:send", async (payload) => {
-      console.log(payload, "new message");
       const { userId: targetUserId, type, title, body, data = {} } = payload;
 
       if (!targetUserId || !type) return;
