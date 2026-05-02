@@ -79,7 +79,6 @@ export const chatSocket = (io) => {
   };
 
   io.on("connection", (socket) => {
-    console.log(`🟢 Connected: ${socket.user.id}`);
     socket.join(`user:${socket.user.id}`);
 
     socket.on("join_room", async (conversationId) => {
@@ -228,6 +227,8 @@ export const chatSocket = (io) => {
       });
     });
 
+
+
     socket.on(
       "message_delivered",
       async ({ messageId, conversationId, otherUserId }) => {
@@ -315,7 +316,6 @@ export const chatSocket = (io) => {
     });
 
     socket.on("disconnect", () => {
-      console.log(`🔴 Disconnected: ${socket.user.id}`);
       for (const [roomId, users] of activeUsersInRoom.entries()) {
         users.delete(socket.user.id);
 

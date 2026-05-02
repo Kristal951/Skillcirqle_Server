@@ -33,23 +33,16 @@ export const saveMessage = async ({
 
     return data;
   } catch (err) {
-    console.log("❌ saveMessage error:", err.message);
     throw err;
   }
 };
 
-/**
- * =====================
- * 🔄 UPDATE LAST MESSAGE
- * =====================
- */
 export const updateConversationLastMessage = async (
   conversationId,
   userId,
   lastMessageId,
 ) => {
   if (!conversationId) return;
-  console.log(conversationId, userId, lastMessageId)
 
   try {
     const { data, error } = await supabaseAdmin.rpc("mark_conversation_read", {
@@ -63,17 +56,12 @@ export const updateConversationLastMessage = async (
       return;
     }
 
-    console.log("✅ conversation updated:", data);
+
   } catch (err) {
     console.error("❌ updateConversationLastMessage error:", err.message);
   }
 };
 
-/**
- * =====================
- * 👤 GET PROFILE
- * =====================
- */
 export const getProfile = async (userId) => {
   if (!userId) return null;
 
@@ -87,6 +75,61 @@ export const getProfile = async (userId) => {
     console.log("❌ getProfile error:", error.message);
     return null;
   }
+
+  return data;
+};
+
+export const editMessage = async ({ messageId, newText, userId }) => {
+  const { data: message } = await supabaseAdmin
+    .from("messages")
+    .select("*")
+    .eq("id", messageId)
+    .single();
+
+  if (!message) throw new Error("Message not found");
+  if (message.sender_id !== userId) throw new Error("Unauthorized");
+
+  const { data, error } = await supabaseAdmin
+    .from("messages")
+    .update({
+      content: newText,
+      is_edited: true,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", messageId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  return data;
+};
+
+export const deleteMessage = async ({ messageId, userId }) => {
+  const { data: message } = await supabaseAdmin
+    .from("messages")
+    .select("*")
+    .eq("id", messageId)
+    .single();
+
+  if (!message) throw new Error("Message not found");
+
+  if (message.sender_id !== userId) {
+    throw new Error("Unauthorized");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("messages")
+    .update({
+      content: "",
+      is_deleted: true,
+      deleted_at: new Date().toISOString(),
+    })
+    .eq("id", messageId)
+    .select()
+    .single();
+
+  if (error) throw error;
 
   return data;
 };

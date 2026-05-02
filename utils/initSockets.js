@@ -1,4 +1,5 @@
 import { chatSocket } from "../sockets/chat.socket.js";
+import { messageSocket } from "../sockets/message.socket.js";
 import { notificationsSocket } from "../sockets/notifications.socket.js";
 
 
@@ -10,4 +11,5 @@ export const initSockets = (io) => {
   initialized = true;
   chatSocket(io);
   notificationsSocket(io)
+  messageSocket(io)
 };

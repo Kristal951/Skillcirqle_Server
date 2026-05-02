@@ -38,8 +38,6 @@ export const notificationsSocket = (io) => {
 
     socket.join(`user:${currentUserId}`);
 
-    console.log("🔔 Notifications connected:", currentUserId);
-
     socket.on("notification:send", async (payload) => {
       const { userId: targetUserId, type, title, body, data = {} } = payload;
 
@@ -110,7 +108,6 @@ export const notificationsSocket = (io) => {
     });
 
     socket.on("disconnect", () => {
-      console.log("🔴 Notifications disconnected:", currentUserId);
     });
   });
 };
