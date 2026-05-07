@@ -12,8 +12,7 @@ export const presenceSocket = (io, socket) => {
       await setUserOnline(userId, socket.id);
       const sockets = await socket.server
         .of("/")
-        .adapter
-        .sockets(new Set([socket.id]));
+        .adapter.sockets(new Set([socket.id]));
 
       const onlineUsers = await getOnlineUsers();
 

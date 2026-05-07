@@ -1,16 +1,12 @@
 import { supabaseAdmin } from "../config/supabase.admin.js";
 
-/**
- * =====================
- * 💾 SAVE MESSAGE
- * =====================
- */
 export const saveMessage = async ({
   conversationId,
   senderId,
   content,
   message_type,
   metadata,
+  reply_to = null,
 }) => {
   if (!conversationId || !senderId || !content?.trim()) {
     throw new Error("Invalid message payload");
@@ -25,8 +21,19 @@ export const saveMessage = async ({
         content: content.trim(),
         message_type: message_type || "text",
         metadata: metadata || {},
+        reply_to,
       })
-      .select()
+      .select(
+        `
+      *,
+      reply:reply_to (
+        id,
+        content,
+        sender_id,
+        metadata
+      )
+    `,
+      )
       .single();
 
     if (error) throw error;
@@ -37,30 +44,28 @@ export const saveMessage = async ({
   }
 };
 
-export const updateConversationLastMessage = async (
-  conversationId,
-  userId,
-  lastMessageId,
-) => {
-  if (!conversationId) return;
+// export const updateConversationLastMessage = async (
+//   conversationId,
+//   userId,
+//   lastMessageId,
+// ) => {
+//   if (!conversationId) return;
 
-  try {
-    const { data, error } = await supabaseAdmin.rpc("mark_conversation_read", {
-      conv_id: conversationId,
-      p_user_id: userId,
-      msg_id: lastMessageId,
-    });
+//   try {
+//     const { data, error } = await supabaseAdmin.rpc("mark_conversation_read", {
+//       conv_id: conversationId,
+//       p_user_id: userId,
+//       msg_id: lastMessageId,
+//     });
 
-    if (error) {
-      console.error("❌ Conversation update error:", error.message);
-      return;
-    }
-
-
-  } catch (err) {
-    console.error("❌ updateConversationLastMessage error:", err.message);
-  }
-};
+//     if (error) {
+//       console.error("❌ Conversation update error:", error.message);
+//       return;
+//     }
+//   } catch (err) {
+//     console.error("❌ updateConversationLastMessage error:", err.message);
+//   }
+// };
 
 export const getProfile = async (userId) => {
   if (!userId) return null;
@@ -133,3 +138,47 @@ export const deleteMessage = async ({ messageId, userId }) => {
 
   return data;
 };
+
+export const updateConversationLastMessage = async (
+  conversationId,
+  message,
+) => {
+  if (!conversationId || !message) return;
+
+  const { data, error } = await supabaseAdmin.rpc(
+    "update_conversation_from_message",
+    {
+      conv_id: conversationId,
+      msg_content: message.content,
+      msg_type: message.message_type,
+      msg_count: Array.isArray(message.metadata?.media)
+        ? message.metadata.media.length
+        : null,
+      msg_id: message.id,
+      msg_created_at: message.created_at,
+    },
+  );
+
+  if (error) {
+    console.error("❌ Failed to update conversation:", error.message);
+  }
+};
+
+// BEGIN
+//   -- Perform the upsert by selecting the latest message ID directly in the query
+//   INSERT INTO conversations_read (
+//     conversation_id,
+//     user_id,
+//     last_read_message_id,
+//     updated_at
+//   )
+//   SELECT conv_id, p_user_id, id, now()
+//   FROM messages
+//   WHERE conversation_id = conv_id
+//   ORDER BY created_at DESC
+//   LIMIT 1
+//   ON CONFLICT (conversation_id, user_id)
+//   DO UPDATE SET
+//     last_read_message_id = EXCLUDED.last_read_message_id,
+//     updated_at = now();
+// END;

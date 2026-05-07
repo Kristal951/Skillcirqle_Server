@@ -107,7 +107,6 @@ export const notificationsSocket = (io) => {
       emitToUser(io, receiverId, "notification:new", notification);
     });
 
-    socket.on("disconnect", () => {
-    });
+    socket.on("disconnect", () => {});
   });
 };

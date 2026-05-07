@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
-import dotenv from 'dotenv'
-dotenv.config()
+import dotenv from "dotenv";
+dotenv.config();
 
 function getEnvVariables() {
   const supabaseURL = process.env.SUPABASE_URL;
@@ -17,7 +17,4 @@ const { supabaseURL, supabaseServiceKey } = getEnvVariables();
 
 console.log("🟢 Supabase Admin Initialized");
 
-export const supabaseAdmin = createClient(
-  supabaseURL,
-  supabaseServiceKey
-);
+export const supabaseAdmin = createClient(supabaseURL, supabaseServiceKey);

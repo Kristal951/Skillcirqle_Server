@@ -154,11 +154,9 @@ export const chatSocket = (io) => {
     });
 
     socket.on("send_message", async (data) => {
+      console.log(data)
       const { conversationId, content, tempId } = data;
       if (!conversationId || !content?.trim()) return;
-
-      const socketsInRoom = await io.in(conversationId).fetchSockets();
-      const onlineUserIds = socketsInRoom.map((s) => s.user?.id);
 
       const participants = await getConversationParticipants(conversationId);
       const recipients = participants.filter((id) => id !== socket.user.id);
@@ -176,6 +174,7 @@ export const chatSocket = (io) => {
             sender_avatar_url: socket.user.avatar,
             ...data.metadata,
           },
+          reply_to: data.reply_to || null,
         });
       } catch (err) {
         socket.emit("message_error", { tempId });
@@ -185,8 +184,7 @@ export const chatSocket = (io) => {
       try {
         await updateConversationLastMessage(
           conversationId,
-          socket.user.id,
-          message.id,
+          message
         );
       } catch (error) {
         console.error(
@@ -195,9 +193,30 @@ export const chatSocket = (io) => {
         );
       }
 
+      if (message.reply) {
+        io.to(conversationId).emit("receive_message", {
+          ...message,
+          sender: {
+            id: socket.user.id,
+            name: socket.user.name,
+            avatar: socket.user.avatar,
+          },
+          tempId,
+        });
+      }
+
       io.to(conversationId).emit("conversation:updated", {
         conversationId,
-        last_message: content,
+
+        last_message: {
+          text: message.text || message.content?.text || "",
+          type: message.message_type,
+          count:
+            message.message_type === "image" || message.message_type === "file"
+              ? (message.media?.length ?? 1)
+              : undefined,
+        },
+
         last_message_at: message.created_at,
         last_message_id: message.id,
       });
@@ -226,8 +245,6 @@ export const chatSocket = (io) => {
         senderId: socket.user.id,
       });
     });
-
-
 
     socket.on(
       "message_delivered",
