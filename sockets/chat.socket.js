@@ -154,7 +154,6 @@ export const chatSocket = (io) => {
     });
 
     socket.on("send_message", async (data) => {
-      console.log(data)
       const { conversationId, content, tempId } = data;
       if (!conversationId || !content?.trim()) return;
 
