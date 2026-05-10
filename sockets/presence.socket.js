@@ -2,6 +2,7 @@ import {
   setUserOffline,
   setUserOnline,
   getOnlineUsers,
+  getLastSeen,
 } from "../services/redis.service.js";
 
 export const presenceSocket = (io, socket) => {
@@ -10,9 +11,6 @@ export const presenceSocket = (io, socket) => {
   const handleConnect = async () => {
     try {
       await setUserOnline(userId, socket.id);
-      const sockets = await socket.server
-        .of("/")
-        .adapter.sockets(new Set([socket.id]));
 
       const onlineUsers = await getOnlineUsers();
 
@@ -22,6 +20,7 @@ export const presenceSocket = (io, socket) => {
       if (isFirstConnection) {
         io.emit("user_online", { userId });
       }
+
       socket.emit("online_users", onlineUsers);
     } catch (err) {
       console.error("❌ Presence connect error:", err.message);
@@ -30,12 +29,48 @@ export const presenceSocket = (io, socket) => {
 
   handleConnect();
 
+  socket.on("get_last_seen_bulk", async ({ userIds }, cb) => {
+    try {
+      if (!Array.isArray(userIds)) return cb([]);
+
+      const results = await Promise.all(
+        userIds.map(async (id) => {
+          const lastSeen = await getLastSeen(id);
+
+          return {
+            userId: id,
+            lastSeen: lastSeen || null,
+          };
+        }),
+      );
+
+      cb(results);
+    } catch (err) {
+      console.error(err);
+      cb([]);
+    }
+  });
+
+  socket.on("get_last_seen", async ({ userId }, callback) => {
+    const lastSeen = await getLastSeen(userId);
+
+    callback({
+      userId,
+      lastSeen,
+    });
+  });
+
   socket.on("disconnect", async () => {
     try {
       const fullyOffline = await setUserOffline(userId, socket.id);
 
       if (fullyOffline) {
-        io.emit("user_offline", { userId });
+        const lastSeen = await getLastSeen(userId);
+
+        io.emit("user_offline", {
+          userId,
+          lastSeen,
+        });
       }
     } catch (err) {
       console.error("❌ Presence disconnect error:", err.message);
