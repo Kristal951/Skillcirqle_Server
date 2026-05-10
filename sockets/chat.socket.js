@@ -316,9 +316,15 @@ export const chatSocket = (io) => {
     socket.on("typing", ({ conversationId }) => {
       if (!conversationId) return;
 
+       const typingUser = {
+      id: socket.user.id,
+      name: socket.user.name,
+      avatar: socket.user.avatar,
+    };
+
       socket.to(conversationId).emit("typing", {
         conversationId,
-        userId: socket.user.id,
+        user: typingUser,
       });
     });
 
