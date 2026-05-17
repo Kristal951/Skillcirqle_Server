@@ -181,10 +181,7 @@ export const chatSocket = (io) => {
       }
 
       try {
-        await updateConversationLastMessage(
-          conversationId,
-          message
-        );
+        await updateConversationLastMessage(conversationId, message);
       } catch (error) {
         console.error(
           "❌ Failed to update conversation last message:",
@@ -316,11 +313,11 @@ export const chatSocket = (io) => {
     socket.on("typing", ({ conversationId }) => {
       if (!conversationId) return;
 
-       const typingUser = {
-      id: socket.user.id,
-      name: socket.user.name,
-      avatar: socket.user.avatar,
-    };
+      const typingUser = {
+        id: socket.user.id,
+        name: socket.user.name,
+        avatar: socket.user.avatar,
+      };
 
       socket.to(conversationId).emit("typing", {
         conversationId,
