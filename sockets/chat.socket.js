@@ -1,8 +1,10 @@
+import { decrypt } from "dotenv";
 import { supabaseAdmin } from "../config/supabase.admin.js";
 import {
   saveMessage,
   updateConversationLastMessage,
 } from "../services/message.service.js";
+import { decryptMessage } from "../utils/encryption.js";
 
 const participantCache = new Map();
 const activeUsersInRoom = new Map();
@@ -236,10 +238,11 @@ export const chatSocket = (io) => {
         status: "sent",
       });
 
-      io.to(conversationId).emit("new_message", {
-        ...message,
-        senderId: socket.user.id,
-      });
+     io.to(conversationId).emit("new_message", {
+  ...message,
+  content: decryptMessage(message.content),
+  senderId: socket.user.id,
+});
     });
 
     socket.on(

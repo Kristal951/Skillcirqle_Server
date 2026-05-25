@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../config/supabase.admin.js";
+import { decryptMessage, encryptMessage } from "../utils/encryption.js";
 
 export const saveMessage = async ({
   conversationId,
@@ -13,12 +14,14 @@ export const saveMessage = async ({
   }
 
   try {
+    const encryptedContent = encryptMessage(content.trim());
+
     const { data, error } = await supabaseAdmin
       .from("messages")
       .insert({
         conversation_id: conversationId,
         sender_id: senderId,
-        content: content.trim(),
+        content: encryptedContent,
         message_type: message_type || "text",
         metadata: metadata || {},
         reply_to,
@@ -40,32 +43,10 @@ export const saveMessage = async ({
 
     return data;
   } catch (err) {
+    console.log(err)
     throw err;
   }
 };
-
-// export const updateConversationLastMessage = async (
-//   conversationId,
-//   userId,
-//   lastMessageId,
-// ) => {
-//   if (!conversationId) return;
-
-//   try {
-//     const { data, error } = await supabaseAdmin.rpc("mark_conversation_read", {
-//       conv_id: conversationId,
-//       p_user_id: userId,
-//       msg_id: lastMessageId,
-//     });
-
-//     if (error) {
-//       console.error("❌ Conversation update error:", error.message);
-//       return;
-//     }
-//   } catch (err) {
-//     console.error("❌ updateConversationLastMessage error:", err.message);
-//   }
-// };
 
 export const getProfile = async (userId) => {
   if (!userId) return null;
@@ -145,11 +126,14 @@ export const updateConversationLastMessage = async (
 ) => {
   if (!conversationId || !message) return;
 
+  const decryptedText = decryptMessage(message.content);
+  console.log(decryptedText, 'dec')
+
   const { data, error } = await supabaseAdmin.rpc(
     "update_conversation_from_message",
     {
       conv_id: conversationId,
-      msg_content: message.content,
+      msg_content: decryptedText,
       msg_type: message.message_type,
       msg_count: Array.isArray(message.metadata?.media)
         ? message.metadata.media.length
@@ -163,22 +147,3 @@ export const updateConversationLastMessage = async (
     console.error("❌ Failed to update conversation:", error.message);
   }
 };
-
-// BEGIN
-//   -- Perform the upsert by selecting the latest message ID directly in the query
-//   INSERT INTO conversations_read (
-//     conversation_id,
-//     user_id,
-//     last_read_message_id,
-//     updated_at
-//   )
-//   SELECT conv_id, p_user_id, id, now()
-//   FROM messages
-//   WHERE conversation_id = conv_id
-//   ORDER BY created_at DESC
-//   LIMIT 1
-//   ON CONFLICT (conversation_id, user_id)
-//   DO UPDATE SET
-//     last_read_message_id = EXCLUDED.last_read_message_id,
-//     updated_at = now();
-// END;
